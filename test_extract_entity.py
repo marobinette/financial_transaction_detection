@@ -14,10 +14,6 @@ class TestExtractPaymentRelationship:
         """Create a ContractParser instance for testing"""
         return ContractParser()
 
-    # ================================================================
-    # Test Case 1: Guard Clauses - Early Returns
-    # ================================================================
-
     def test_empty_party1_returns_unchanged(self, parser):
         """Test that empty party1 returns party1, party2 unchanged"""
         text = "Some contract text"
@@ -41,11 +37,6 @@ class TestExtractPaymentRelationship:
         party2 = None
         result = parser.extract_payment_relationship(text, party1, party2)
         assert result == (None, None)
-
-    # ================================================================
-    # Test Case 2: CRITICAL - Generic Entity Type Matching
-    # This is the fix that went from 60% error rate to 100% accuracy!
-    # ================================================================
 
     def test_city_pays_county_generic_pattern(self, parser):
         """Test generic 'The City shall pay the County' pattern"""
