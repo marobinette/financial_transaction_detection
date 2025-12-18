@@ -407,7 +407,6 @@ def main():
 
     print("Loading contracts data...")
     df = pd.read_csv("ocr_contracts.csv")
-    df = df.head(3)
     print(f"Processing {len(df)} contracts...")
 
     parser = ContractParser()
@@ -415,9 +414,6 @@ def main():
 
     # Process each contract
     for idx, row in df.iterrows():
-        if idx % 1000 == 0:
-            print(f"  Processed {idx}/{len(df)} contracts...")
-
         pdf_id = row["PDF_ID"]
         text = row["surya_ocr"]
 
@@ -431,7 +427,7 @@ def main():
     output_df = output_df[["PDF_ID", "principal", "agent"]]
 
     # Save to CSV
-    output_path = "extracted_contracts.csv"
+    output_path = "extracted_entities.csv"
     output_df.to_csv(output_path, index=False)
 
 
