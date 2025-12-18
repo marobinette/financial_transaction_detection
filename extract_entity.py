@@ -95,9 +95,9 @@ class ContractParser:
         """
         if not name or len(name.strip()) < 3:
             return False
-        
+
         name_lower = name.lower()
-        
+
         # Reject clearly invalid patterns
         invalid_patterns = [
             r"^county of each participant",
@@ -110,15 +110,15 @@ class ContractParser:
             r"^to as",
             r"^\s*(and|or|the|a|an)\s*$",
         ]
-        
+
         for pattern in invalid_patterns:
             if re.search(pattern, name_lower):
                 return False
-        
+
         # Reject if it's just a single organization type keyword
         if name.strip() in [kw.lower() for kw in self.entity_keywords]:
             return False
-        
+
         return True
 
     def clean_entity_name(self, name: str) -> str:
@@ -217,7 +217,7 @@ class ContractParser:
             party_match = re.match(r"Party\s+(\d+)\s*$", line.strip(), re.IGNORECASE)
             if party_match and i + 1 < len(lines):
                 party_num = int(party_match.group(1))
-                
+
                 # Look for the party name - it might be on the next line, or the line after
                 # if the next line is just an organization type keyword
                 name = None
@@ -225,7 +225,7 @@ class ContractParser:
                     if i + offset >= len(lines):
                         break
                     candidate_line = lines[i + offset].strip()
-                    
+
                     # Skip empty lines, Party declarations, and organization type keywords
                     if (
                         candidate_line
@@ -233,18 +233,20 @@ class ContractParser:
                         and not re.match(r"Party\s+\d+", candidate_line, re.IGNORECASE)
                         and candidate_line not in self.entity_keywords
                         and not re.match(r"^\d+$", candidate_line)  # Skip county codes
-                        and not re.match(r"^[A-Z]{2,3}$", candidate_line)  # Skip state abbreviations
+                        and not re.match(
+                            r"^[A-Z]{2,3}$", candidate_line
+                        )  # Skip state abbreviations
                     ):
                         # Clean up the name - remove newlines and extra spaces
                         name = candidate_line.replace("\n", " ").replace("\r", " ")
                         name = re.sub(r"\s+", " ", name).strip()
-                        
+
                         # Validate it's a reasonable entity name
                         if self.is_valid_entity_name(name):
                             break
                         else:
                             name = None
-                
+
                 # Only store if we found a valid name and haven't stored this party yet
                 if name and party_num not in parties:
                     parties[party_num] = name
