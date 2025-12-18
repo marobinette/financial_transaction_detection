@@ -280,3 +280,43 @@ class TestExtractPaymentRelationship:
         party2 = "Story County"
         result = parser.extract_payment_relationship(text, party1, party2)
         assert result == ("City of Ames", "Story County")
+
+    def test_agreement_pattern_with_date(self, parser):
+        """Test pattern with explicit date"""
+        text = """This agreement is entered into this 2007, by and between
+Polk County, Iowa, and City of Des Moines, Iowa."""
+        party1, party2 = parser.extract_entities(text)
+        assert party1 == "Polk County"
+        assert party2 == "City of Des Moines"
+
+    def test_agreement_pattern_by_between(self, parser):
+        """Test pattern with 'by between' (no 'and')"""
+        text = """This agreement is entered into this 2007, by between
+Story County, Iowa, and City of Ames, Iowa."""
+        party1, party2 = parser.extract_entities(text)
+        assert party1 == "Story County"
+        assert party2 == "City of Ames"
+
+    def test_agreement_pattern_multi_line_entities(self, parser):
+        """Test pattern where entities span multiple lines"""
+        text = """This agreement is entered into this
+2007, by
+and between Mills County , Iowa (hereinafter referred to as "County"), and City of
+Pacifica: Jon : , Iowa (hereinafter referred to as "City"), and the Mills County E911
+Board."""
+        party1, party2 = parser.extract_entities(text)
+        # Should extract Mills County and City of Pacifica (with OCR noise removed)
+        assert party1 == "Mills County"
+        assert "City" in party2 or "Pacifica" in party2
+
+    def test_agreement_pattern_removes_hereinafter(self, parser):
+        """Test that hereinafter clauses are properly removed"""
+        text = """This agreement is entered into this 2007, by and between
+Chickasaw County (hereinafter referred to as "County"), and
+City of Lawler (hereinafter referred to as "City")."""
+        party1, party2 = parser.extract_entities(text)
+        assert party1 == "Chickasaw County"
+        assert party2 == "City of Lawler"
+        # Verify hereinafter is removed
+        assert "hereinafter" not in party1.lower()
+        assert "hereinafter" not in party2.lower()

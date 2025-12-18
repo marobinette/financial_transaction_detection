@@ -191,7 +191,54 @@ class ContractParser:
         elif 2 in parties:
             return None, parties[2]
 
-        # Fallback: Look for explicit entity names in the text
+        # the most reasonable fallback
+        # Fallback 1: Look for "This agreement is entered into this by and between..." pattern
+        # Pattern: "This agreement is entered into this [date], by (and) between [Entity1], and [Entity2]"
+        # This handles multi-line matches and OCR variations
+        # Stop entity1 at ", and" or " and" before entity2
+        # Stop entity2 at ", and the", "(hereinafter", or end of sentence
+        agreement_pattern = r"This\s+agreement\s+is\s+entered\s+into\s+this\s+(?:\d{4}[,\s]+)?by\s+(?:and\s+)?between\s+(.+?)(?:,\s+and\s+|\s+and\s+)(.+?)(?:\(hereinafter|,\s+and\s+the\s+[A-Z]|\.\s+Whereas|\.\s*$)"
+        agreement_match = re.search(agreement_pattern, text, re.IGNORECASE | re.DOTALL)
+        if agreement_match:
+            entity1_raw = agreement_match.group(1).strip()
+            entity2_raw = agreement_match.group(2).strip()
+
+            # Clean up entity names - remove "hereinafter" clauses and extra punctuation
+            # Remove "(hereinafter referred to as ...)"
+            entity1 = re.sub(
+                r"\s*\(hereinafter[^)]*\)", "", entity1_raw, flags=re.IGNORECASE
+            ).strip()
+            entity2 = re.sub(
+                r"\s*\(hereinafter[^)]*\)", "", entity2_raw, flags=re.IGNORECASE
+            ).strip()
+
+            # Remove OCR noise patterns like ": Jon :" or similar (but preserve colons in "City of")
+            entity1 = re.sub(r":\s*[A-Z][a-z]+\s*:", " ", entity1).strip()
+            entity2 = re.sub(r":\s*[A-Z][a-z]+\s*:", " ", entity2).strip()
+
+            # Remove trailing commas, colons, and clean up whitespace
+            entity1 = re.sub(r"\s*[,;:]+\s*$", "", entity1).strip()
+            entity2 = re.sub(r"\s*[,;:]+\s*$", "", entity2).strip()
+
+            # Remove state names like ", Iowa" if present
+            entity1 = re.sub(
+                r"\s*,\s*Iowa\s*$", "", entity1, flags=re.IGNORECASE
+            ).strip()
+            entity2 = re.sub(
+                r"\s*,\s*Iowa\s*$", "", entity2, flags=re.IGNORECASE
+            ).strip()
+
+            # Normalize whitespace (handle newlines and multiple spaces)
+            entity1 = re.sub(r"\s+", " ", entity1).strip()
+            entity2 = re.sub(r"\s+", " ", entity2).strip()
+
+            # If we have valid entities (not too short), return them
+            if entity1 and len(entity1) > 3 and entity2 and len(entity2) > 3:
+                return entity1, entity2
+            elif entity1 and len(entity1) > 3:
+                return entity1, None
+
+        # Fallback 2: Look for explicit entity names in the text
         entity_pattern = r"(?:City|County|Town|Village|Township)\s+of\s+[\w\s]+"
         matches = re.findall(entity_pattern, text, re.IGNORECASE)
         if matches:
@@ -260,7 +307,6 @@ class ContractParser:
         # Example: "The City shall pay the County" where parties are "City of Des Moines" and "Polk County"
         party1_type = self.get_entity_type(party1)
         party2_type = self.get_entity_type(party2)
-
         if party1_type and party2_type and party1_type != party2_type:
             # Define generic payment patterns: (pattern, payer_type, payee_type)
             generic_patterns = [
@@ -301,12 +347,15 @@ class ContractParser:
         payment_verb_pattern = r"(?:shall|will|agrees?\s+to)\s+pay\s+(?:to\s+)?"
 
         # Check if party1 pays party2 (handles multi-line matches with DOTALL)
-        pattern1 = rf"{re.escape(party1_lower)}.*?{payment_verb_pattern}.*?{re.escape(party2_lower)}"
+        # Limit search window to ~100 chars before "shall pay" and ~100 chars after to prevent
+        # matching across the entire document. This ensures we only match within the same payment clause.
+        pattern1 = rf"{re.escape(party1_lower)}.{{0,100}}?{payment_verb_pattern}.{{0,100}}?{re.escape(party2_lower)}"
         if re.search(pattern1, text_lower, re.DOTALL):
             return party1, party2
 
         # Check if party2 pays party1
-        pattern2 = rf"{re.escape(party2_lower)}.*?{payment_verb_pattern}.*?{re.escape(party1_lower)}"
+        # Same window limitation to prevent cross-document matching
+        pattern2 = rf"{re.escape(party2_lower)}.{{0,100}}?{payment_verb_pattern}.{{0,100}}?{re.escape(party1_lower)}"
         if re.search(pattern2, text_lower, re.DOTALL):
             return party2, party1
 
@@ -361,8 +410,6 @@ class ContractParser:
         elif party2_pay_count > party1_pay_count:
             return party2, party1
 
-        # Default: keep original order (Party 1 as payer, Party 2 as payee)
-        # This is often the case in 28E agreements
         return party1, party2
 
     def parse_contract(self, text: str, pdf_id: str) -> Dict[str, any]:
@@ -377,7 +424,6 @@ class ContractParser:
 
         # Extract parties
         party1, party2 = self.extract_entities(text)
-
         # Determine payment relationship
         if party1 and party2:
             principal, agent = self.extract_payment_relationship(text, party1, party2)
@@ -403,16 +449,10 @@ class ContractParser:
 
 
 def main():
-    """Main function to process the contracts CSV file"""
-
-    print("Loading contracts data...")
     df = pd.read_csv("ocr_contracts.csv")
-    print(f"Processing {len(df)} contracts...")
-
     parser = ContractParser()
     results = []
 
-    # Process each contract
     for idx, row in df.iterrows():
         pdf_id = row["PDF_ID"]
         text = row["surya_ocr"]
@@ -420,13 +460,8 @@ def main():
         result = parser.parse_contract(text, pdf_id)
         results.append(result)
 
-    # Create output dataframe
     output_df = pd.DataFrame(results)
-
-    # Drop the surya_ocr column - user can join it later using PDF_ID
     output_df = output_df[["PDF_ID", "principal", "agent"]]
-
-    # Save to CSV
     output_path = "extracted_entities.csv"
     output_df.to_csv(output_path, index=False)
 
