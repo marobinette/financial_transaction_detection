@@ -11,14 +11,8 @@ from typing import Dict, Optional, Tuple
 
 class ContractParser:
     def __init__(self):
-        # OCR error corrections (common mistakes in Iowa documents)
         self.ocr_corrections = {
-            r"\blowa\b": "Iowa",  # Common OCR error
-            r"\bDes l\/loines\b": "Des Moines",
-            r"\blVlarshall\b": "Marshall",
-            r"\bCountv\b": "County",
-            r"\bCitv\b": "City",
-            r"\bCHickasaw\b": "Chickasaw",  # Weird capitalization
+            r"\blowa\b": "Iowa",
         }
 
         # Words that should end entity names
@@ -34,14 +28,6 @@ class ContractParser:
             "enter",
             "contract",
             "between",
-            "wishes",
-            "wish",
-            "provides",
-            "provide",
-            "shall",
-            "will",
-            "herein",
-            "hereinafter",
         ]
 
         # Patterns for identifying payment relationships
@@ -89,38 +75,6 @@ class ContractParser:
 
         return text
 
-    def is_valid_entity_name(self, name: str) -> bool:
-        """
-        Validate that an entity name is reasonable and not clearly invalid
-        """
-        if not name or len(name.strip()) < 3:
-            return False
-
-        name_lower = name.lower()
-
-        # Reject clearly invalid patterns
-        invalid_patterns = [
-            r"^county of each participant",
-            r"^each participant",
-            r"^participant to",
-            r"^full legal name",
-            r"^organization type",
-            r"^party \d+",
-            r"hereinafter.*to as$",
-            r"^to as",
-            r"^\s*(and|or|the|a|an)\s*$",
-        ]
-
-        for pattern in invalid_patterns:
-            if re.search(pattern, name_lower):
-                return False
-
-        # Reject if it's just a single organization type keyword
-        if name.strip() in [kw.lower() for kw in self.entity_keywords]:
-            return False
-
-        return True
-
     def clean_entity_name(self, name: str) -> str:
         """
         Clean up entity names by removing pollution and standardizing format
@@ -136,19 +90,12 @@ class ContractParser:
         sentence_patterns = [
             r"^(.+?)\s+(?:is|are|was|were|will|shall|has|have)\s+",
             r"^(.+?)\s+(?:established|organized|incorporated|created)\s+",
-            r"^(.+?)\s+(?:wishes?|wish)\s+(?:to|for)",
-            r"^(.+?)\s+(?:provides?|provide)\s+(?:for|to)",
         ]
         for pattern in sentence_patterns:
             match = re.match(pattern, name, re.IGNORECASE)
             if match:
                 name = match.group(1).strip()
                 break
-
-        # Remove "hereinafter" clauses more aggressively
-        name = re.sub(r"\s*\(?hereinafter[^)]*\)?\s*", " ", name, flags=re.IGNORECASE)
-        name = re.sub(r"\s+hereinafter.*$", "", name, flags=re.IGNORECASE)
-        name = re.sub(r"\s+to as\s*$", "", name, flags=re.IGNORECASE)
 
         # Split on stopwords and take only the first part
         name_lower = name.lower()
@@ -209,46 +156,25 @@ class ContractParser:
 
         # Look for "Party 1" and "Party 2" sections (common in 28E forms)
         # In these forms, the party name is on the line immediately after "Party N"
-        # Sometimes the next line is just the organization type (City, County, etc.),
-        # in which case we need to look at the line after that
         lines = text.split("\n")
         for i, line in enumerate(lines):
             # Check if this line is a Party declaration
             party_match = re.match(r"Party\s+(\d+)\s*$", line.strip(), re.IGNORECASE)
             if party_match and i + 1 < len(lines):
                 party_num = int(party_match.group(1))
-
-                # Look for the party name - it might be on the next line, or the line after
-                # if the next line is just an organization type keyword
-                name = None
-                for offset in [1, 2]:
-                    if i + offset >= len(lines):
-                        break
-                    candidate_line = lines[i + offset].strip()
-
-                    # Skip empty lines, Party declarations, and organization type keywords
-                    if (
-                        candidate_line
-                        and len(candidate_line) > 2
-                        and not re.match(r"Party\s+\d+", candidate_line, re.IGNORECASE)
-                        and candidate_line not in self.entity_keywords
-                        and not re.match(r"^\d+$", candidate_line)  # Skip county codes
-                        and not re.match(
-                            r"^[A-Z]{2,3}$", candidate_line
-                        )  # Skip state abbreviations
-                    ):
-                        # Clean up the name - remove newlines and extra spaces
-                        name = candidate_line.replace("\n", " ").replace("\r", " ")
-                        name = re.sub(r"\s+", " ", name).strip()
-
-                        # Validate it's a reasonable entity name
-                        if self.is_valid_entity_name(name):
-                            break
-                        else:
-                            name = None
-
-                # Only store if we found a valid name and haven't stored this party yet
-                if name and party_num not in parties:
+                # The next non-empty line should be the party name
+                next_line = lines[i + 1].strip()
+                # Skip if it's another Party declaration or an organization type keyword
+                if (
+                    next_line
+                    and party_num not in parties
+                    and len(next_line) > 2
+                    and not re.match(r"Party\s+\d+", next_line, re.IGNORECASE)
+                    and next_line not in self.entity_keywords
+                ):
+                    # Clean up the name - remove newlines and extra spaces
+                    name = next_line.replace("\n", " ").replace("\r", " ")
+                    name = re.sub(r"\s+", " ", name).strip()
                     parties[party_num] = name
 
         # If we found parties, return them in order
@@ -259,63 +185,7 @@ class ContractParser:
         elif 2 in parties:
             return None, parties[2]
 
-        # the most reasonable fallback
-        # Fallback 1: Look for "This agreement is entered into this by and between..." pattern
-        # Pattern: "This agreement is entered into this [date], by (and) between [Entity1], and [Entity2]"
-        # This handles multi-line matches and OCR variations
-        # Stop entity1 at ", and" or " and" before entity2
-        # Stop entity2 at ", and the", "(hereinafter", or end of sentence
-        # Also handle variations like "This Agreement is made and entered into..."
-        agreement_patterns = [
-            r"This\s+agreement\s+is\s+entered\s+into\s+this\s+(?:\d{4}[,\s]+)?by\s+(?:and\s+)?between\s+(.+?)(?:,\s+and\s+|\s+and\s+)(.+?)(?:\(hereinafter|,\s+and\s+the\s+[A-Z]|\.\s+Whereas|\.\s*$)",
-            r"This\s+agreement\s+is\s+made\s+(?:and\s+entered\s+into)?\s+(?:this\s+)?(?:\d{1,2}[a-z]{2}\s+day\s+of\s+)?(?:\w+\s+)?(?:\d{4}[,\s]+)?by\s+(?:and\s+)?between\s+(.+?)(?:,\s+and\s+|\s+and\s+)(.+?)(?:\(hereinafter|,\s+and\s+the\s+[A-Z]|\.\s+Whereas|\.\s*$)",
-            r"This\s+agreement\s+\(?agreement\)?\s+is\s+made\s+(?:and\s+entered\s+into)?\s+(?:this\s+)?(?:\d{1,2}[a-z]{2}\s+day\s+of\s+)?(?:\w+\s+)?(?:\d{4}[,\s]+)?by\s+(?:and\s+)?between\s+(.+?)(?:,\s+and\s+|\s+and\s+)(.+?)(?:\(hereinafter|,\s+and\s+the\s+[A-Z]|\.\s+Whereas|\.\s*$)",
-        ]
-        agreement_match = None
-        for pattern in agreement_patterns:
-            agreement_match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-            if agreement_match:
-                break
-        if agreement_match:
-            entity1_raw = agreement_match.group(1).strip()
-            entity2_raw = agreement_match.group(2).strip()
-
-            # Clean up entity names - remove "hereinafter" clauses and extra punctuation
-            # Remove "(hereinafter referred to as ...)"
-            entity1 = re.sub(
-                r"\s*\(hereinafter[^)]*\)", "", entity1_raw, flags=re.IGNORECASE
-            ).strip()
-            entity2 = re.sub(
-                r"\s*\(hereinafter[^)]*\)", "", entity2_raw, flags=re.IGNORECASE
-            ).strip()
-
-            # Remove OCR noise patterns like ": Jon :" or similar (but preserve colons in "City of")
-            entity1 = re.sub(r":\s*[A-Z][a-z]+\s*:", " ", entity1).strip()
-            entity2 = re.sub(r":\s*[A-Z][a-z]+\s*:", " ", entity2).strip()
-
-            # Remove trailing commas, colons, and clean up whitespace
-            entity1 = re.sub(r"\s*[,;:]+\s*$", "", entity1).strip()
-            entity2 = re.sub(r"\s*[,;:]+\s*$", "", entity2).strip()
-
-            # Remove state names like ", Iowa" if present
-            entity1 = re.sub(
-                r"\s*,\s*Iowa\s*$", "", entity1, flags=re.IGNORECASE
-            ).strip()
-            entity2 = re.sub(
-                r"\s*,\s*Iowa\s*$", "", entity2, flags=re.IGNORECASE
-            ).strip()
-
-            # Normalize whitespace (handle newlines and multiple spaces)
-            entity1 = re.sub(r"\s+", " ", entity1).strip()
-            entity2 = re.sub(r"\s+", " ", entity2).strip()
-
-            # If we have valid entities (not too short), return them
-            if entity1 and len(entity1) > 3 and entity2 and len(entity2) > 3:
-                return entity1, entity2
-            elif entity1 and len(entity1) > 3:
-                return entity1, None
-
-        # Fallback 2: Look for explicit entity names in the text
+        # Fallback: Look for explicit entity names in the text
         entity_pattern = r"(?:City|County|Town|Village|Township)\s+of\s+[\w\s]+"
         matches = re.findall(entity_pattern, text, re.IGNORECASE)
         if matches:
@@ -513,16 +383,10 @@ class ContractParser:
             principal = principal.replace("\n", " ").replace("\r", " ")
             principal = re.sub(r"\s+", " ", principal).strip()
             principal = self.clean_entity_name(principal)
-            # Validate and reject if clearly invalid
-            if not self.is_valid_entity_name(principal):
-                principal = ""
         if agent:
             agent = agent.replace("\n", " ").replace("\r", " ")
             agent = re.sub(r"\s+", " ", agent).strip()
             agent = self.clean_entity_name(agent)
-            # Validate and reject if clearly invalid
-            if not self.is_valid_entity_name(agent):
-                agent = ""
 
         return {
             "PDF_ID": pdf_id,
